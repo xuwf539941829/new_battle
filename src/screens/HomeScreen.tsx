@@ -2,22 +2,25 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import apiService from '../api';
 
-export default function HomeScreen({ navigation }: any) {
+export default function HomeScreen({ navigation, route }: any) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
 
+  const { onLogout } = route.params;
+
   useEffect(() => {
-    const loginUser = async () => {
+    const fetchUser = async () => {
       try {
-        const u = await apiService.login();
+        const u = await apiService.getMe();
         setUser(u);
       } catch (error) {
-        Alert.alert('登录失败', '请检查网络连接');
+        Alert.alert('获取用户信息失败', '请重新登录');
+        handleLogout();
       } finally {
         setLoading(false);
       }
     };
-    loginUser();
+    fetchUser();
 
     // Refresh user when screen is focused (optional, but good for limit updates)
     const unsubscribe = navigation.addListener('focus', () => {
@@ -27,6 +30,21 @@ export default function HomeScreen({ navigation }: any) {
     });
     return unsubscribe;
   }, [navigation]);
+
+  const handleLogout = async () => {
+    await apiService.logout();
+    onLogout();
+  };
+
+  const handleResetLimits = async () => {
+    try {
+      const res = await apiService.resetLimits();
+      setUser(res.user);
+      Alert.alert('成功', '次数已重置！');
+    } catch (error: any) {
+      Alert.alert('重置失败', error.message || '请重试');
+    }
+  };
 
   if (loading) {
     return (
@@ -39,10 +57,16 @@ export default function HomeScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <Text style={styles.logoutText}>退出登录</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.userInfo}>
         <Text style={styles.welcomeText}>你好，{user?.nickname}</Text>
         <Text style={styles.statsText}>
-          今日扔瓶：{user?.daily_throws}/3 | 今日捞瓶：{user?.daily_picks}/5
+          今日扔瓶：{user?.daily_throws} | 今日捞瓶：{user?.daily_picks}
         </Text>
       </View>
 
@@ -68,11 +92,36 @@ export default function HomeScreen({ navigation }: any) {
           <Text style={styles.buttonText}>我的足迹</Text>
         </TouchableOpacity>
       </View>
+
+      <TouchableOpacity style={styles.debugButton} onPress={handleResetLimits}>
+         <Text style={styles.debugText}>【调试：重置使用次数】</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  header: {
+    alignItems: 'flex-end',
+    marginTop: 10,
+  },
+  logoutButton: {
+    padding: 10,
+  },
+  logoutText: {
+    color: '#e53935',
+    fontWeight: 'bold',
+  },
+  debugButton: {
+    marginTop: 40,
+    alignItems: 'center',
+    padding: 10,
+  },
+  debugText: {
+    color: '#9e9e9e',
+    fontSize: 14,
+    textDecorationLine: 'underline',
+  },
   center: {
     flex: 1,
     justifyContent: 'center',

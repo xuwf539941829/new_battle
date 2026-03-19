@@ -1,49 +1,71 @@
 import axios from 'axios';
-import { Platform } from 'react-native';
-
-// Simple device ID generation for the scope of this project.
-// In a real app, you'd use something like expo-application or expo-device,
-// and store it securely using AsyncStorage or SecureStore.
-const generateDeviceId = () => {
-  return `device-${Platform.OS}-${Math.random().toString(36).substring(2, 15)}`;
-};
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Assuming the API will be tested locally using the host's IP address.
-// If using Android Emulator, 10.0.2.2 points to host's localhost.
-// Using a generic network local IP or localhost for now. In Expo with physical device, you often need the local network IP.
 const API_BASE_URL = 'http://127.0.0.1:3000/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
 });
 
+// Setup Axios Interceptor to attach JWT token
+api.interceptors.request.use(
+  async (config) => {
+    const token = await AsyncStorage.getItem('userToken');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 class ApiService {
-  private deviceId: string;
   public currentUser: any = null;
 
-  constructor() {
-    this.deviceId = generateDeviceId();
+  async register(username: string, password: string) {
+    try {
+      const response = await api.post('/auth/register', { username, password });
+      return response.data;
+    } catch (error: any) {
+      console.error('Register error', error);
+      throw new Error(error.response?.data?.error || 'Failed to register');
+    }
   }
 
-  async login() {
+  async login(username: string, password: string) {
     try {
-      const response = await api.post('/login', { device_id: this.deviceId });
+      const response = await api.post('/auth/login', { username, password });
+      this.currentUser = response.data.user;
+      await AsyncStorage.setItem('userToken', response.data.token);
+      return response.data;
+    } catch (error: any) {
+      console.error('Login error', error);
+      throw new Error(error.response?.data?.error || 'Failed to login');
+    }
+  }
+
+  async logout() {
+    this.currentUser = null;
+    await AsyncStorage.removeItem('userToken');
+  }
+
+  async getMe() {
+    try {
+      const response = await api.get('/user/me');
       this.currentUser = response.data;
       return this.currentUser;
-    } catch (error) {
-      console.error('Login error', error);
-      throw error;
+    } catch (error: any) {
+       console.error('Get me error', error);
+       throw new Error(error.response?.data?.error || 'Failed to get user details');
     }
   }
 
   async throwBottle(content: string) {
-    if (!this.currentUser) throw new Error('Not logged in');
     try {
-      const response = await api.post('/bottle/throw', {
-        user_id: this.currentUser.id,
-        content
-      });
-      // Update limits based on response
+      const response = await api.post('/bottle/throw', { content });
       this.currentUser = response.data.user;
       return response.data;
     } catch (error: any) {
@@ -53,11 +75,8 @@ class ApiService {
   }
 
   async pickupBottle() {
-    if (!this.currentUser) throw new Error('Not logged in');
     try {
-      const response = await api.post('/bottle/pickup', {
-        user_id: this.currentUser.id
-      });
+      const response = await api.post('/bottle/pickup');
       this.currentUser = response.data.user;
       return response.data;
     } catch (error: any) {
@@ -67,10 +86,8 @@ class ApiService {
   }
 
   async replyToBottle(bottleId: number, content: string) {
-    if (!this.currentUser) throw new Error('Not logged in');
     try {
       const response = await api.post('/message/reply', {
-        user_id: this.currentUser.id,
         bottle_id: bottleId,
         content
       });
@@ -82,10 +99,8 @@ class ApiService {
   }
 
   async reportBottle(bottleId: number, reason: string) {
-    if (!this.currentUser) throw new Error('Not logged in');
     try {
       const response = await api.post('/bottle/report', {
-        reporter_id: this.currentUser.id,
         bottle_id: bottleId,
         reason
       });
@@ -97,16 +112,27 @@ class ApiService {
   }
 
   async getHistory() {
-    if (!this.currentUser) throw new Error('Not logged in');
     try {
-      const response = await api.get(`/history?user_id=${this.currentUser.id}`);
+      const response = await api.get(`/history`);
       return response.data;
     } catch (error: any) {
       console.error('History error', error);
       throw new Error(error.response?.data?.error || 'Failed to get history');
     }
   }
+
+  async resetLimits() {
+    try {
+      const response = await api.post('/debug/reset-limits');
+      this.currentUser = response.data.user;
+      return response.data;
+    } catch (error: any) {
+       console.error('Debug reset error', error);
+       throw new Error(error.response?.data?.error || 'Failed to reset limits');
+    }
+  }
 }
 
 const apiService = new ApiService();
+export { apiService, api };
 export default apiService;
