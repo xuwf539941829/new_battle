@@ -1,0 +1,72 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id               Int       @id @default(autoincrement())
+  device_id        String    @unique
+  nickname         String
+  daily_throws     Int       @default(0)
+  daily_picks      Int       @default(0)
+  status           String    @default("active") // active, banned
+  last_action_date DateTime? @default(now())
+  created_at       DateTime  @default(now())
+
+  // Relations
+  sent_bottles     Bottle[]  @relation("SentBottles")
+  picked_bottles   Bottle[]  @relation("PickedBottles")
+  sent_messages    Message[] @relation("SentMessages")
+  received_messages Message[] @relation("ReceivedMessages")
+  reports          Report[]  @relation("Reports")
+}
+
+model Bottle {
+  id           Int       @id @default(autoincrement())
+  sender_id    Int
+  picker_id    Int?
+  content      String
+  content_type String    @default("text") // text, image, voice
+  status       String    @default("drifting") // drifting, picked
+  created_at   DateTime  @default(now())
+
+  // Relations
+  sender       User      @relation("SentBottles", fields: [sender_id], references: [id])
+  picker       User?     @relation("PickedBottles", fields: [picker_id], references: [id])
+  messages     Message[]
+  reports      Report[]
+}
+
+model Message {
+  id          Int      @id @default(autoincrement())
+  bottle_id   Int
+  sender_id   Int
+  receiver_id Int
+  content     String
+  created_at  DateTime @default(now())
+  is_read     Boolean  @default(false)
+
+  // Relations
+  bottle      Bottle   @relation(fields: [bottle_id], references: [id])
+  sender      User     @relation("SentMessages", fields: [sender_id], references: [id])
+  receiver    User     @relation("ReceivedMessages", fields: [receiver_id], references: [id])
+}
+
+model Report {
+  id               Int      @id @default(autoincrement())
+  reporter_id      Int
+  target_bottle_id Int
+  reason           String
+  created_at       DateTime @default(now())
+
+  // Relations
+  reporter         User     @relation("Reports", fields: [reporter_id], references: [id])
+  bottle           Bottle   @relation(fields: [target_bottle_id], references: [id])
+}
