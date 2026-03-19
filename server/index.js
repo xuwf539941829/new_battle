@@ -1,10 +1,18 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
+
+// Configurations
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
+const MAX_DAILY_THROWS = parseInt(process.env.MAX_DAILY_THROWS || '3', 10);
+const MAX_DAILY_PICKS = parseInt(process.env.MAX_DAILY_PICKS || '5', 10);
 
 app.use(cors());
 app.use(express.json());
@@ -25,56 +33,127 @@ function generateNickname() {
   return `${adjs[Math.floor(Math.random() * adjs.length)]}${nouns[Math.floor(Math.random() * nouns.length)]}`;
 }
 
-// User Auto-Login / Register
-app.post('/api/login', async (req, res) => {
+// User Register
+app.post('/api/auth/register', async (req, res) => {
   try {
-    const { device_id } = req.body;
-    if (!device_id) {
-      return res.status(400).json({ error: 'device_id is required' });
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'username and password are required' });
     }
 
-    let user = await prisma.user.findUnique({
-      where: { device_id }
+    const existingUser = await prisma.user.findUnique({ where: { username } });
+    if (existingUser) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: {
+        username,
+        password: hashedPassword,
+        nickname: generateNickname(),
+        last_action_date: new Date()
+      }
     });
 
-    const now = new Date();
+    res.status(201).json({ message: 'User registered successfully', userId: user.id });
+  } catch (error) {
+    console.error('Register error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
+// User Login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'username and password are required' });
+    }
+
+    let user = await prisma.user.findUnique({ where: { username } });
     if (!user) {
-      user = await prisma.user.create({
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const now = new Date();
+    // Check and reset daily limits if it's a new day
+    if (!isToday(user.last_action_date)) {
+      user = await prisma.user.update({
+        where: { id: user.id },
         data: {
-          device_id,
-          nickname: generateNickname(),
+          daily_throws: 0,
+          daily_picks: 0,
           last_action_date: now
         }
       });
-    } else {
-      // Check and reset daily limits if it's a new day
-      if (!isToday(user.last_action_date)) {
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            daily_throws: 0,
-            daily_picks: 0,
-            last_action_date: now
-          }
-        });
-      }
     }
 
-    res.json(user);
+    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({ token, user: { ...user, password: '' } }); // Don't send password back
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Throw a bottle
-app.post('/api/bottle/throw', async (req, res) => {
-  try {
-    const { user_id, content } = req.body;
+// Middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-    if (!user_id || !content) {
-      return res.status(400).json({ error: 'user_id and content are required' });
+  if (!token) return res.status(401).json({ error: 'Access token required' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+    req.user = user;
+    next();
+  });
+};
+
+// Get Current User Info
+app.get('/api/user/me', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if new day to reset limits
+    const now = new Date();
+    if (!isToday(user.last_action_date)) {
+      const updatedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          daily_throws: 0,
+          daily_picks: 0,
+          last_action_date: now
+        }
+      });
+      return res.json({ ...updatedUser, password: '' });
+    }
+
+    res.json({ ...user, password: '' });
+  } catch (error) {
+    console.error('Get me error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Throw a bottle
+app.post('/api/bottle/throw', authenticateToken, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const user_id = req.user.id;
+
+    if (!content) {
+      return res.status(400).json({ error: 'Content is required' });
     }
 
     if (content.trim() === '') {
@@ -98,8 +177,8 @@ app.post('/api/bottle/throw', async (req, res) => {
       daily_throws = 0;
     }
 
-    if (daily_throws >= 3) {
-      return res.status(403).json({ error: 'Daily throw limit reached (3/3)' });
+    if (daily_throws >= MAX_DAILY_THROWS) {
+      return res.status(403).json({ error: `Daily throw limit reached (${MAX_DAILY_THROWS}/${MAX_DAILY_THROWS})` });
     }
 
     // Create bottle and update user limits in transaction
@@ -128,13 +207,9 @@ app.post('/api/bottle/throw', async (req, res) => {
 });
 
 // Pickup a bottle
-app.post('/api/bottle/pickup', async (req, res) => {
+app.post('/api/bottle/pickup', authenticateToken, async (req, res) => {
   try {
-    const { user_id } = req.body;
-
-    if (!user_id) {
-      return res.status(400).json({ error: 'user_id is required' });
-    }
+    const user_id = req.user.id;
 
     const user = await prisma.user.findUnique({ where: { id: user_id } });
     if (!user) {
@@ -153,8 +228,8 @@ app.post('/api/bottle/pickup', async (req, res) => {
       daily_picks = 0;
     }
 
-    if (daily_picks >= 5) {
-      return res.status(403).json({ error: 'Daily pick limit reached (5/5)' });
+    if (daily_picks >= MAX_DAILY_PICKS) {
+      return res.status(403).json({ error: `Daily pick limit reached (${MAX_DAILY_PICKS}/${MAX_DAILY_PICKS})` });
     }
 
     // SQLite doesn't have a simple random selection that works well with Prisma directly for a large DB,
@@ -212,12 +287,13 @@ app.post('/api/bottle/pickup', async (req, res) => {
 });
 
 // Reply to a bottle
-app.post('/api/message/reply', async (req, res) => {
+app.post('/api/message/reply', authenticateToken, async (req, res) => {
   try {
-    const { user_id, bottle_id, content } = req.body;
+    const { bottle_id, content } = req.body;
+    const user_id = req.user.id;
 
-    if (!user_id || !bottle_id || !content) {
-      return res.status(400).json({ error: 'user_id, bottle_id, and content are required' });
+    if (!bottle_id || !content) {
+      return res.status(400).json({ error: 'bottle_id and content are required' });
     }
 
     if (content.trim() === '') {
@@ -262,12 +338,13 @@ app.post('/api/message/reply', async (req, res) => {
 });
 
 // Report a bottle
-app.post('/api/bottle/report', async (req, res) => {
+app.post('/api/bottle/report', authenticateToken, async (req, res) => {
   try {
-    const { reporter_id, bottle_id, reason } = req.body;
+    const { bottle_id, reason } = req.body;
+    const reporter_id = req.user.id;
 
-    if (!reporter_id || !bottle_id || !reason) {
-      return res.status(400).json({ error: 'reporter_id, bottle_id, and reason are required' });
+    if (!bottle_id || !reason) {
+      return res.status(400).json({ error: 'bottle_id and reason are required' });
     }
 
     const report = await prisma.report.create({
@@ -286,15 +363,9 @@ app.post('/api/bottle/report', async (req, res) => {
 });
 
 // History
-app.get('/api/history', async (req, res) => {
+app.get('/api/history', authenticateToken, async (req, res) => {
   try {
-    const { user_id } = req.query;
-
-    if (!user_id) {
-      return res.status(400).json({ error: 'user_id is required' });
-    }
-
-    const uid = parseInt(user_id, 10);
+    const uid = req.user.id;
 
     const thrownBottles = await prisma.bottle.findMany({
       where: { sender_id: uid },
@@ -322,6 +393,23 @@ app.get('/api/history', async (req, res) => {
     res.json({ thrown: thrownBottles, picked: pickedBottles });
   } catch (error) {
     console.error('History error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Debug endpoint to reset limits
+app.post('/api/debug/reset-limits', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        daily_throws: 0,
+        daily_picks: 0
+      }
+    });
+    res.json({ message: 'Limits reset successfully', user: { ...user, password: '' } });
+  } catch (error) {
+    console.error('Debug reset error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

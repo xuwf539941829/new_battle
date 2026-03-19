@@ -12,7 +12,8 @@ datasource db {
 
 model User {
   id               Int       @id @default(autoincrement())
-  device_id        String    @unique
+  username         String    @unique
+  password         String
   nickname         String
   daily_throws     Int       @default(0)
   daily_picks      Int       @default(0)
