@@ -6,15 +6,16 @@ export default function HistoryScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'thrown' | 'picked'>('thrown');
   const [history, setHistory] = useState<{ thrown: any[], picked: any[] }>({ thrown: [], picked: [] });
+  const [unreadCounts, setUnreadCounts] = useState<{ [key: number]: number }>({});
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
-
-  const fetchHistory = async () => {
+  const fetchHistoryAndUnread = async () => {
     try {
-      const data = await apiService.getHistory();
-      setHistory(data);
+      const [historyData, unreadData] = await Promise.all([
+        apiService.getHistory(),
+        apiService.getUnreadCount()
+      ]);
+      setHistory(historyData);
+      setUnreadCounts(unreadData);
     } catch (error) {
       console.error(error);
     } finally {
@@ -22,32 +23,54 @@ export default function HistoryScreen({ navigation }: any) {
     }
   };
 
+  useEffect(() => {
+    fetchHistoryAndUnread();
+    const unsubscribe = navigation.addListener('focus', fetchHistoryAndUnread);
+    return unsubscribe;
+  }, [navigation]);
+
+  const handlePressCard = (item: any) => {
+    navigation.navigate('ChatDetail', { bottle_id: item.id, itemData: item });
+  };
+
   const renderItem = ({ item }: { item: any }) => {
     const isThrown = activeTab === 'thrown';
     const otherUser = isThrown ? (item.picker_id ? '已被人捞起' : '还在漂流中') : `来自: ${item.sender?.nickname}`;
+    const unread = unreadCounts[item.id] || 0;
 
     return (
-      <View style={styles.card}>
+      <TouchableOpacity style={styles.card} onPress={() => handlePressCard(item)} activeOpacity={0.8}>
         <View style={styles.cardHeader}>
           <Text style={styles.status}>{otherUser}</Text>
           <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
         </View>
-        <Text style={styles.content} numberOfLines={3}>{item.content}</Text>
+
+        {unread > 0 && (
+           <View style={styles.badge}>
+              <Text style={styles.badgeText}>{unread}</Text>
+           </View>
+        )}
+
+        {item.content_type === 'TEXT' ? (
+           <Text style={styles.content} numberOfLines={3}>{item.content}</Text>
+        ) : (
+           <Text style={[styles.content, styles.mediaPlaceholder]}>[媒体内容]</Text>
+        )}
 
         {item.messages && item.messages.length > 0 && (
           <View style={styles.messagesContainer}>
-            <Text style={styles.messageTitle}>留言互动：</Text>
-            {item.messages.map((msg: any) => {
+            <Text style={styles.messageTitle}>最新回复：</Text>
+            {item.messages.slice(-1).map((msg: any) => {
                const isMe = msg.sender_id === apiService.currentUser.id;
                return (
-                 <Text key={msg.id} style={isMe ? styles.myMsg : styles.theirMsg}>
-                   {isMe ? '我: ' : '对方: '}{msg.content}
+                 <Text key={msg.id} style={isMe ? styles.myMsg : styles.theirMsg} numberOfLines={1}>
+                   {isMe ? '我: ' : '对方: '}{msg.content_type === 'TEXT' ? msg.content : '[多媒体消息]'}
                  </Text>
                );
             })}
           </View>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -109,6 +132,29 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
+    position: 'relative',
+  },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#e53935',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 5,
+    zIndex: 10,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  mediaPlaceholder: {
+    fontStyle: 'italic',
+    color: '#888',
   },
   tab: {
     flex: 1,

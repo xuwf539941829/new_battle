@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import apiService from '../api';
+import socketService from '../socket';
 
 export default function HomeScreen({ navigation, route }: any) {
   const [loading, setLoading] = useState(true);
@@ -32,6 +33,7 @@ export default function HomeScreen({ navigation, route }: any) {
   }, [navigation]);
 
   const handleLogout = async () => {
+    socketService.disconnect();
     await apiService.logout();
     onLogout();
   };
@@ -72,6 +74,13 @@ export default function HomeScreen({ navigation, route }: any) {
 
       <View style={styles.actions}>
         <TouchableOpacity
+          style={[styles.button, styles.profileButton]}
+          onPress={() => navigation.navigate('Profile')}
+        >
+          <Text style={styles.buttonText}>个人中心</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.button, styles.throwButton]}
           onPress={() => navigation.navigate('Throw')}
         >
@@ -101,6 +110,10 @@ export default function HomeScreen({ navigation, route }: any) {
 }
 
 const styles = StyleSheet.create({
+  profileButton: {
+    backgroundColor: '#ff9800',
+    marginBottom: 20,
+  },
   header: {
     alignItems: 'flex-end',
     marginTop: 10,

@@ -63,9 +63,39 @@ class ApiService {
     }
   }
 
-  async throwBottle(content: string) {
+  async updateProfile(data: { avatar?: string, nickname?: string, bio?: string, gender?: string }) {
     try {
-      const response = await api.post('/bottle/throw', { content });
+      const response = await api.put('/user/profile', data);
+      this.currentUser = response.data.user;
+      return response.data;
+    } catch (error: any) {
+      console.error('Update profile error', error);
+      throw new Error(error.response?.data?.error || 'Failed to update profile');
+    }
+  }
+
+  async uploadFile(fileUri: string, mimeType: string) {
+    try {
+      const formData = new FormData();
+      formData.append('file', {
+        uri: fileUri,
+        type: mimeType,
+        name: fileUri.split('/').pop() || 'upload',
+      } as any);
+
+      const response = await api.post('/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data.media_url;
+    } catch (error: any) {
+      console.error('Upload file error', error);
+      throw new Error(error.response?.data?.error || 'Failed to upload file');
+    }
+  }
+
+  async throwBottle(content: string, contentType: string = 'TEXT', mediaUrl?: string) {
+    try {
+      const response = await api.post('/bottle/throw', { content, content_type: contentType, media_url: mediaUrl });
       this.currentUser = response.data.user;
       return response.data;
     } catch (error: any) {
@@ -85,11 +115,13 @@ class ApiService {
     }
   }
 
-  async replyToBottle(bottleId: number, content: string) {
+  async replyToBottle(bottleId: number, content: string, contentType: string = 'TEXT', mediaUrl?: string) {
     try {
       const response = await api.post('/message/reply', {
         bottle_id: bottleId,
-        content
+        content,
+        content_type: contentType,
+        media_url: mediaUrl
       });
       return response.data;
     } catch (error: any) {
@@ -131,8 +163,28 @@ class ApiService {
        throw new Error(error.response?.data?.error || 'Failed to reset limits');
     }
   }
+
+  async getUnreadCount() {
+    try {
+      const response = await api.get('/bottles/unread-count');
+      return response.data;
+    } catch (error: any) {
+       console.error('Unread count error', error);
+       throw new Error(error.response?.data?.error || 'Failed to fetch unread count');
+    }
+  }
+
+  async markMessagesRead(bottleId: number) {
+    try {
+      const response = await api.patch('/messages/read', { bottle_id: bottleId });
+      return response.data;
+    } catch (error: any) {
+       console.error('Mark read error', error);
+       throw new Error(error.response?.data?.error || 'Failed to mark messages as read');
+    }
+  }
 }
 
 const apiService = new ApiService();
-export { apiService, api };
+export { apiService, api, API_BASE_URL };
 export default apiService;

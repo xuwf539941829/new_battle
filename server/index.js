@@ -4,8 +4,20 @@ const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+  }
+});
+
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
 
@@ -16,6 +28,20 @@ const MAX_DAILY_PICKS = parseInt(process.env.MAX_DAILY_PICKS || '5', 10);
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files for uploads
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Configure Multer for local storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  }
+});
+const upload = multer({ storage });
 
 // Helper to check if a date is today
 function isToday(date) {
@@ -117,10 +143,41 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Update Current User Profile
+app.put('/api/user/profile', authenticateToken, async (req, res) => {
+  try {
+    const { avatar, nickname, bio, gender } = req.body;
+
+    // Validate inputs or allow undefined to ignore updates
+    const dataToUpdate = {};
+    if (avatar !== undefined) dataToUpdate.avatar = avatar;
+    if (nickname !== undefined) dataToUpdate.nickname = nickname;
+    if (bio !== undefined) dataToUpdate.bio = bio;
+    if (gender !== undefined) dataToUpdate.gender = gender;
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: dataToUpdate
+    });
+
+    res.json({ message: 'Profile updated successfully', user: { ...user, password: '' } });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get Current User Info
 app.get('/api/user/me', authenticateToken, async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      include: {
+        _count: {
+          select: { sent_bottles: true, picked_bottles: true }
+        }
+      }
+    });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -134,6 +191,11 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
           daily_throws: 0,
           daily_picks: 0,
           last_action_date: now
+        },
+        include: {
+          _count: {
+            select: { sent_bottles: true, picked_bottles: true }
+          }
         }
       });
       return res.json({ ...updatedUser, password: '' });
@@ -149,15 +211,11 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
 // Throw a bottle
 app.post('/api/bottle/throw', authenticateToken, async (req, res) => {
   try {
-    const { content } = req.body;
+    const { content, content_type, media_url } = req.body;
     const user_id = req.user.id;
 
-    if (!content) {
-      return res.status(400).json({ error: 'Content is required' });
-    }
-
-    if (content.trim() === '') {
-      return res.status(400).json({ error: 'Content cannot be empty' });
+    if (!content && !media_url) {
+      return res.status(400).json({ error: 'Content or media is required' });
     }
 
     const user = await prisma.user.findUnique({ where: { id: user_id } });
@@ -186,7 +244,9 @@ app.post('/api/bottle/throw', authenticateToken, async (req, res) => {
       prisma.bottle.create({
         data: {
           sender_id: user.id,
-          content: content.trim(),
+          content: content ? content.trim() : '',
+          content_type: content_type || 'TEXT',
+          media_url: media_url || null,
           status: 'drifting'
         }
       }),
@@ -289,15 +349,11 @@ app.post('/api/bottle/pickup', authenticateToken, async (req, res) => {
 // Reply to a bottle
 app.post('/api/message/reply', authenticateToken, async (req, res) => {
   try {
-    const { bottle_id, content } = req.body;
+    const { bottle_id, content, content_type, media_url } = req.body;
     const user_id = req.user.id;
 
-    if (!bottle_id || !content) {
-      return res.status(400).json({ error: 'bottle_id and content are required' });
-    }
-
-    if (content.trim() === '') {
-      return res.status(400).json({ error: 'Content cannot be empty' });
+    if (!bottle_id || (!content && !media_url)) {
+      return res.status(400).json({ error: 'bottle_id and content/media are required' });
     }
 
     const bottle = await prisma.bottle.findUnique({ where: { id: bottle_id } });
@@ -326,9 +382,20 @@ app.post('/api/message/reply', authenticateToken, async (req, res) => {
         bottle_id,
         sender_id: user_id,
         receiver_id,
-        content: content.trim()
+        content: content ? content.trim() : '',
+        content_type: content_type || 'TEXT',
+        media_url: media_url || null
       }
     });
+
+    // --- Socket.io Real-time Push ---
+    const receiverSocketId = userSockets.get(receiver_id);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('new_message', {
+        bottle_id,
+        message
+      });
+    }
 
     res.json(message);
   } catch (error) {
@@ -358,6 +425,64 @@ app.post('/api/bottle/report', authenticateToken, async (req, res) => {
     res.json({ message: 'Report submitted successfully', report });
   } catch (error) {
     console.error('Report error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get Unread Count for Picked Bottles
+app.get('/api/bottles/unread-count', authenticateToken, async (req, res) => {
+  try {
+    const user_id = req.user.id;
+
+    // Get bottles where the current user is a participant (sender or picker)
+    // and there are messages addressed to the current user with is_read = false
+    const unreadMessagesCount = await prisma.message.groupBy({
+      by: ['bottle_id'],
+      where: {
+        receiver_id: user_id,
+        is_read: false
+      },
+      _count: {
+        id: true
+      }
+    });
+
+    const unreadMap = {};
+    unreadMessagesCount.forEach(item => {
+      unreadMap[item.bottle_id] = item._count.id;
+    });
+
+    res.json(unreadMap);
+  } catch (error) {
+    console.error('Unread count error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Mark messages in a bottle as read
+app.patch('/api/messages/read', authenticateToken, async (req, res) => {
+  try {
+    const { bottle_id } = req.body;
+    const user_id = req.user.id;
+
+    if (!bottle_id) {
+      return res.status(400).json({ error: 'bottle_id is required' });
+    }
+
+    const updated = await prisma.message.updateMany({
+      where: {
+        bottle_id: bottle_id,
+        receiver_id: user_id,
+        is_read: false
+      },
+      data: {
+        is_read: true
+      }
+    });
+
+    res.json({ message: 'Messages marked as read', count: updated.count });
+  } catch (error) {
+    console.error('Mark read error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -397,6 +522,21 @@ app.get('/api/history', authenticateToken, async (req, res) => {
   }
 });
 
+// Upload Endpoint
+app.post('/api/upload', authenticateToken, upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    // Return relative URL so frontend can prepend server host
+    const media_url = `/uploads/${req.file.filename}`;
+    res.json({ media_url });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Debug endpoint to reset limits
 app.post('/api/debug/reset-limits', authenticateToken, async (req, res) => {
   try {
@@ -414,7 +554,31 @@ app.post('/api/debug/reset-limits', authenticateToken, async (req, res) => {
   }
 });
 
+// --- Socket.io Integration ---
+const userSockets = new Map(); // Store userId -> socketId mapping
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  // When a user authenticates their socket
+  socket.on('register_user', (userId) => {
+    userSockets.set(userId, socket.id);
+    console.log(`User ${userId} registered with socket ${socket.id}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    // Remove the socket mapping on disconnect
+    for (let [key, value] of userSockets.entries()) {
+      if (value === socket.id) {
+        userSockets.delete(key);
+        break;
+      }
+    }
+  });
+});
+
 // For testing purposes during implementation
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
