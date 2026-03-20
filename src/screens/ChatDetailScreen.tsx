@@ -101,6 +101,7 @@ export default function ChatDetailScreen({ navigation, route }: any) {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const isPreparingRef = useRef(false);
+  const lastSendTimeRef = useRef<number>(0);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -165,6 +166,12 @@ export default function ChatDetailScreen({ navigation, route }: any) {
   async function startRecording() {
     if (isPreparingRef.current) return;
 
+    const now = Date.now();
+    if (now - lastSendTimeRef.current < 2000) {
+      Alert.alert('提示', '发送太频繁啦，请稍微休息一下~');
+      return;
+    }
+
     try {
       isPreparingRef.current = true;
       if (recording) {
@@ -224,10 +231,15 @@ export default function ChatDetailScreen({ navigation, route }: any) {
       if (uri) {
          const url = await apiService.uploadFile(uri, 'audio/m4a');
          await handleSend('VOICE', url);
+         lastSendTimeRef.current = Date.now();
       }
     } catch (error: any) {
        console.error('Recording stop error', error);
-       Alert.alert('发送语音失败', error.message);
+       if (error.message.includes('Network Error')) {
+          Alert.alert('发送语音失败', '网络连接不稳定或文件过大，请稍后再试');
+       } else {
+          Alert.alert('发送语音失败', error.message);
+       }
     } finally {
        setSending(false);
     }
