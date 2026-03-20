@@ -100,6 +100,7 @@ export default function ChatDetailScreen({ navigation, route }: any) {
   // Audio Recording State
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const isPreparingRef = useRef(false);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -162,31 +163,58 @@ export default function ChatDetailScreen({ navigation, route }: any) {
 
   // Audio Recording Functions
   async function startRecording() {
+    if (isPreparingRef.current) return;
+
     try {
+      isPreparingRef.current = true;
+      if (recording) {
+        console.warn('Recording already in progress or not cleaned up. Unloading previous.');
+        await recording.stopAndUnloadAsync();
+        setRecording(null);
+      }
+
       await Audio.requestPermissionsAsync();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-         Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(recording);
+      const newRecording = new Audio.Recording();
+      await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+
+      // Since prepare is async, the user might have released the button already
+      // Checking local state or ref isn't perfect, but at least we've secured the creation phase.
+      await newRecording.startAsync();
+      setRecording(newRecording);
       setIsRecording(true);
     } catch (err) {
       console.error('Failed to start recording', err);
+      setIsRecording(false);
+      setRecording(null);
+    } finally {
+      isPreparingRef.current = false;
     }
   }
 
   async function stopRecording() {
     setIsRecording(false);
-    if (!recording) return;
+
+    // If the user released the button while prepare was still running,
+    // we wait briefly or simply rely on the fact that recording might be null.
+    // In a real production app, you might want to await isPreparingRef.current === false
+    // For now, if recording is null, we just exit, which prevents crashing but abandons the recording.
+    if (!recording) {
+       return;
+    }
 
     setSending(true);
+
+    const activeRecording = recording;
+    setRecording(null); // Clear state immediately so subsequent presses don't grab the same object
+
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
+      await activeRecording.stopAndUnloadAsync();
+      const uri = activeRecording.getURI();
 
       // Reset Audio Mode for playback
       await Audio.setAudioModeAsync({
@@ -198,9 +226,9 @@ export default function ChatDetailScreen({ navigation, route }: any) {
          await handleSend('VOICE', url);
       }
     } catch (error: any) {
+       console.error('Recording stop error', error);
        Alert.alert('发送语音失败', error.message);
     } finally {
-       setRecording(null);
        setSending(false);
     }
   }

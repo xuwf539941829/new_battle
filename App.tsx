@@ -1,8 +1,7 @@
 import * as React from 'react';
-import { useState, useEffect } from 'react';
+import { useContext } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, ActivityIndicator } from 'react-native';
 
 import HomeScreen from './src/screens/HomeScreen';
@@ -14,38 +13,12 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import EditProfileScreen from './src/screens/EditProfileScreen';
 import ChatDetailScreen from './src/screens/ChatDetailScreen';
-import apiService from './src/api';
-import socketService from './src/socket';
+import { AuthProvider, AuthContext } from './src/context/AuthContext';
 
 const Stack = createNativeStackNavigator();
 
-export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const checkAuth = async () => {
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (token) {
-        // Try to fetch user info to ensure token is valid
-        const user = await apiService.getMe();
-        setIsAuthenticated(true);
-        // Initialize socket
-        socketService.connect(user.id);
-      } else {
-        setIsAuthenticated(false);
-      }
-    } catch (e) {
-      console.warn("Auth check failed, user needs to login", e);
-      setIsAuthenticated(false);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    checkAuth();
-  }, []);
+function RootNavigator() {
+  const { isAuthenticated, loading } = useContext(AuthContext);
 
   if (loading) {
     return (
@@ -59,14 +32,8 @@ export default function App() {
     <NavigationContainer>
       <Stack.Navigator>
         {isAuthenticated ? (
-          // Main App Stack
           <Stack.Group>
-            <Stack.Screen
-               name="Home"
-               component={HomeScreen}
-               options={{ title: '漂流瓶' }}
-               initialParams={{ onLogout: () => setIsAuthenticated(false) }}
-            />
+            <Stack.Screen name="Home" component={HomeScreen} options={{ title: '漂流瓶' }} />
             <Stack.Screen name="Throw" component={ThrowScreen} options={{ title: '写一封信' }} />
             <Stack.Screen name="Pickup" component={PickupScreen} options={{ title: '探索海洋' }} />
             <Stack.Screen name="History" component={HistoryScreen} options={{ title: '我的足迹' }} />
@@ -75,31 +42,20 @@ export default function App() {
             <Stack.Screen name="ChatDetail" component={ChatDetailScreen} options={{ title: '漂流瓶详情' }} />
           </Stack.Group>
         ) : (
-          // Auth Stack
           <Stack.Group screenOptions={{ headerShown: false }}>
-            <Stack.Screen
-              name="Login"
-              component={LoginScreen}
-              initialParams={{ onLogin: () => {
-                setIsAuthenticated(true);
-                if (apiService.currentUser) {
-                  socketService.connect(apiService.currentUser.id);
-                }
-              }}}
-            />
-            <Stack.Screen
-              name="Register"
-              component={RegisterScreen}
-              initialParams={{ onLogin: () => {
-                setIsAuthenticated(true);
-                if (apiService.currentUser) {
-                  socketService.connect(apiService.currentUser.id);
-                }
-              }}}
-            />
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
           </Stack.Group>
         )}
       </Stack.Navigator>
     </NavigationContainer>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <RootNavigator />
+    </AuthProvider>
   );
 }

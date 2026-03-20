@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import apiService from '../api';
+import { AuthContext } from '../context/AuthContext';
 
-export default function LoginScreen({ navigation, route }: any) {
+export default function LoginScreen({ navigation }: any) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { onLogin } = route.params;
+  const { login } = useContext(AuthContext);
 
   const handleLogin = async () => {
     if (!username || !password) {
@@ -17,7 +18,7 @@ export default function LoginScreen({ navigation, route }: any) {
     setLoading(true);
     try {
       await apiService.login(username, password);
-      onLogin(); // Trigger app re-render
+      login(); // Context updates state and connects socket
     } catch (error: any) {
       Alert.alert('登录失败', error.message || '请检查账号密码是否正确');
     } finally {
@@ -54,7 +55,7 @@ export default function LoginScreen({ navigation, route }: any) {
         {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>登录</Text>}
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('Register', { onLogin })}>
+      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('Register')}>
         <Text style={styles.linkText}>还没有账号？去注册</Text>
       </TouchableOpacity>
     </View>

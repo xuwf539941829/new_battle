@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import apiService from '../api';
 import socketService from '../socket';
+import { AuthContext } from '../context/AuthContext';
 
-export default function HomeScreen({ navigation, route }: any) {
+export default function HomeScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
 
-  const { onLogout } = route.params;
+  const { logout } = useContext(AuthContext);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -16,7 +17,7 @@ export default function HomeScreen({ navigation, route }: any) {
         setUser(u);
       } catch (error) {
         Alert.alert('获取用户信息失败', '请重新登录');
-        handleLogout();
+        logout();
       } finally {
         setLoading(false);
       }
@@ -33,9 +34,7 @@ export default function HomeScreen({ navigation, route }: any) {
   }, [navigation]);
 
   const handleLogout = async () => {
-    socketService.disconnect();
-    await apiService.logout();
-    onLogout();
+    await logout();
   };
 
   const handleResetLimits = async () => {

@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import apiService from '../api';
+import { AuthContext } from '../context/AuthContext';
 
-export default function RegisterScreen({ navigation, route }: any) {
+export default function RegisterScreen({ navigation }: any) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { onLogin } = route.params;
+  const { login } = useContext(AuthContext);
 
   const handleRegister = async () => {
     if (!username || !password || !confirmPassword) {
@@ -24,7 +25,7 @@ export default function RegisterScreen({ navigation, route }: any) {
       await apiService.register(username, password);
       // Automatically login after successful registration
       await apiService.login(username, password);
-      onLogin();
+      login();
     } catch (error: any) {
       Alert.alert('注册失败', error.message || '请重试');
     } finally {
